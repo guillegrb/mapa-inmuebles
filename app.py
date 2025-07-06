@@ -1,86 +1,41 @@
-
 import streamlit as st
 import pandas as pd
 import folium
+from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
-from geopy.geocoders import Nominatim
-from time import sleep
-from io import BytesIO
+from geopy.geocoders import OpenCage
+
+# Configuración de la API de OpenCage
+API_KEY = "87b6265a9a23449ca54620eeff3f5ea4"
 
 st.set_page_config(page_title="Mapa de Inmuebles", layout="wide")
+st.title("🗺️ Mapa de Inmuebles con Ahorro")
 
-st.title("📍 Visualizador de inmuebles en mapa")
+uploaded_file = st.file_uploader("Sube tu archivo Excel", type=["xlsx"])
 
-# Subir archivo Excel
-archivo = st.file_uploader("📁 Sube tu archivo Excel (.xlsx)", type=["xlsx"])
+if uploaded_file:
+    df = pd.read_excel(uploaded_file)
 
-if archivo:
-    # Leer el Excel
-    df = pd.read_excel(archivo)
-
-    columnas_esperadas = {"Dirección", "Precio", "Enlace", "Porcentaje de ahorro"}
-    if not columnas_esperadas.issubset(df.columns):
-        st.error("❌ El archivo debe tener las columnas: Dirección, Precio, Enlace, Porcentaje de ahorro")
+    if not {"Dirección", "Precio", "Enlace", "Porcentaje de ahorro"}.issubset(df.columns):
+        st.error("El archivo debe contener las columnas: Dirección, Precio, Enlace y Porcentaje de ahorro")
     else:
-        # Filtros antes de geocodificar
-        with st.sidebar:
-            st.header("🔎 Filtros")
-            ahorro_min = st.slider("Porcentaje mínimo de ahorro (%)", 0, 100, 0)
-            precio_max = st.number_input("Precio máximo (€)", value=1_000_000)
+        geolocator = OpenCage(API_KEY)
+        m = folium.Map(location=[-15.78, -47.92], zoom_start=5)
+        marker_cluster = MarkerCluster().add_to(m)
 
-        df_filtrado = df[
-            (df["Porcentaje de ahorro"] >= ahorro_min) &
-            (df["Precio"] <= precio_max)
-        ]
+        for _, row in df.iterrows():
+            try:
+                location = geolocator.geocode(row['Dirección'])
+                if location:
+                    popup_html = f"""<b>Precio:</b> {row['Precio']}<br>
+<b>Ahorro:</b> {row['Porcentaje de ahorro']}<br>
+<a href="{row['Enlace']}" target="_blank">Ver enlace</a>"""
+                    folium.Marker(
+                        location=[location.latitude, location.longitude],
+                        popup=popup_html,
+                        tooltip=row['Dirección']
+                    ).add_to(marker_cluster)
+            except Exception as e:
+                st.warning(f"No se pudo localizar: {row['Dirección']}")
 
-        if df_filtrado.empty:
-            st.warning("⚠️ No hay resultados que cumplan los filtros.")
-        else:
-            geolocator = Nominatim(user_agent="app_mapa_inmuebles")
-            coordenadas = []
-
-            with st.spinner("🔍 Geocodificando direcciones..."):
-                for direccion in df_filtrado["Dirección"]:
-                    try:
-                        location = geolocator.geocode(direccion)
-                        if location:
-                            coordenadas.append((location.latitude, location.longitude))
-                        else:
-                            coordenadas.append((None, None))
-                    except:
-                        coordenadas.append((None, None))
-                    sleep(1)
-
-            df_filtrado["Latitud"] = [lat for lat, lon in coordenadas]
-            df_filtrado["Longitud"] = [lon for lat, lon in coordenadas]
-
-            if df_filtrado["Latitud"].notna().sum() == 0:
-                st.warning("⚠️ No se pudo geolocalizar ninguna dirección.")
-            else:
-                lat_init = df_filtrado["Latitud"].dropna().iloc[0]
-                lon_init = df_filtrado["Longitud"].dropna().iloc[0]
-                mapa = folium.Map(location=[lat_init, lon_init], zoom_start=13)
-
-                for _, row in df_filtrado.iterrows():
-                    if pd.notna(row["Latitud"]) and pd.notna(row["Longitud"]):
-                        popup = folium.Popup(
-                            f"<b>Dirección:</b> {row['Dirección']}<br>"
-                            f"<b>Precio:</b> {row['Precio']}<br>"
-                            f"<b>Ahorro:</b> {row['Porcentaje de ahorro']}<br>"
-                            f"<a href='{row['Enlace']}' target='_blank'>Ver propiedad</a>",
-                            max_width=300
-                        )
-                        folium.Marker(
-                            location=[row["Latitud"], row["Longitud"]],
-                            popup=popup,
-                            icon=folium.Icon(color="blue", icon="home")
-                        ).add_to(mapa)
-
-                st.success("✅ Mapa generado:")
-                st_data = st_folium(mapa, width=1200, height=600)
-
-                # Descargar como HTML
-                html_out = "mapa_inmuebles.html"
-                mapa.save(html_out)
-                with open(html_out, "rb") as f:
-                    st.download_button("💾 Descargar mapa en HTML", f, file_name="mapa_inmuebles.html")
+        st_folium(m, width=1000, height=600)
